@@ -1,7 +1,7 @@
 /* PartGrid Service Worker – macht die App offline nutzbar.
    WICHTIG: Diese Nummer muss immer mit  const VERSION  in index.html
    übereinstimmen. Wird sie nicht hochgezählt, bleibt die alte Fassung im Cache. */
-const V = 'partgrid-v0.12.0';
+const V = 'partgrid-v0.13.0';
 const ASSETS = [
   './',
   './index.html',

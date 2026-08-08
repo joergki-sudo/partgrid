@@ -109,6 +109,19 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
 .warnbar{background:#3a2c07;border:1px solid #6b5310;color:#ffdd8a;border-radius:10px;
   padding:10px;font-size:14px;margin-bottom:12px}
 .hidden{display:none!important}
+#bericht{position:fixed;inset:0;z-index:100;background:#fff;overflow:auto;
+  padding:10px 10px calc(20px + env(safe-area-inset-bottom));
+  padding-top:calc(10px + env(safe-area-inset-top))}
+#bericht .leiste{position:sticky;top:0;z-index:2;display:flex;gap:8px;
+  background:#fff;padding:6px 0 10px;border-bottom:1px solid #dde5ec;margin-bottom:12px}
+#bericht .leiste button{flex:1;padding:13px}
+@media print{
+  body{padding:0!important;background:#fff!important}
+  body > *{display:none!important}
+  #bericht{display:block!important;position:static;padding:0;overflow:visible}
+  #bericht .leiste{display:none!important}
+  nav,header,.toast{display:none!important}
+}
 </style>
 </head>
 <body>
@@ -314,6 +327,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
   <button id="n-export" onclick="go('export')"><span class="ic">📦</span>Export</button>
 </nav>
 
+<div id="bericht" class="hidden"></div>
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
 
@@ -330,7 +344,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.12.0';
+const VERSION = '0.13.0';
 
 const DEFAULT_KATALOG = [
 "Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
@@ -1082,9 +1096,15 @@ function fuellungFuer(it,i){
   return i%2 ? XFILL.hell : XFILL.keine;
 }
 
-async function bildMasse(blob){
-  try{ const b=await createImageBitmap(blob); return [b.width,b.height]; }
-  catch(e){ return [FOTO_PX[0],FOTO_PX[1]]; }
+/* Jedes Bild sauber als JPEG neu berechnen. Excel verlässt sich auf das
+   angekündigte Format – ein durchgereichtes HEIC oder PNG bliebe leer. */
+async function alsJpeg(blob){
+  const img=await createImageBitmap(blob);
+  const c=document.createElement('canvas');
+  c.width=img.width; c.height=img.height;
+  c.getContext('2d').drawImage(img,0,0);
+  const j=await new Promise(r=>c.toBlob(r,'image/jpeg',.82));
+  return {bytes:new Uint8Array(await j.arrayBuffer()), w:img.width, h:img.height};
 }
 
 function xStyles(){
@@ -1142,15 +1162,16 @@ async function exportXlsx(){
     const e=S.einsatz;
 
     /* --- Bilder einsammeln --- */
-    const bilder=[];
+    const bilder=[]; const fehler=[];
     for(const it of S.items){
       it._bild=0;
       if(!it.photo) continue;
-      const blob=await get('photos',it.photo);
-      if(!blob) continue;
-      const [w,h]=await bildMasse(blob);
-      bilder.push({bytes:new Uint8Array(await blob.arrayBuffer()), w, h});
-      it._bild=bilder.length;                       // 1-basiert
+      try{
+        const blob=await get('photos',it.photo);
+        if(!blob){ fehler.push(it.nr); continue }
+        bilder.push(await alsJpeg(blob));
+        it._bild=bilder.length;                     // 1-basiert
+      }catch(err){ console.warn('Bild',it.nr,err); fehler.push(it.nr); }
     }
 
     /* --- Kopfblock --- */
@@ -1294,7 +1315,8 @@ ${bilder.length?'<Override PartName="/xl/drawings/drawing1.xml" ContentType="app
     const datei=new File([blob],baseName()+'.xlsx',
       {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     await shareOrDownload([datei]);
-    toast('Excel-Tabelle erstellt');
+    toast(`Excel-Tabelle erstellt · ${bilder.length} Foto(s) eingebettet`+
+          (fehler.length?` · ohne Bild: Nr. ${fehler.join(', ')}`:''),4500);
   }catch(err){
     console.error(err);
     toast('Tabelle konnte nicht erzeugt werden: '+err.message,5000);
@@ -1307,80 +1329,111 @@ ${bilder.length?'<Override PartName="/xl/drawings/drawing1.xml" ContentType="app
    Lässt sich auf dem iPhone öffnen und über Teilen › Drucken als PDF
    sichern. Kein Excel nötig.
    =================================================================== */
+/* Baut Kopf, Tabelle und Stil. wurzel = Aufhänger der Stilregeln:
+   '#bericht' für die Ansicht in der App, 'body' für die eigenständige Datei. */
+async function berichtTeile(wurzel){
+  const e=S.einsatz;
+  const kopf=[
+    ['Fahrzeug-/Loknummer',e.fzg],['Baureihe / Fahrzeugtyp',e.br],
+    ['Datum',fmtDate(e.datum)],['Kilometerstand',e.km?e.km+' km':''],
+    ['Anlass',e.anlass],['Protokoll-/Auftragsnr.',e.prot],
+    ['Bearbeiter',e.bearb],['Werk / Standort',e.ort],['Bemerkung',e.bem]
+  ].filter(r=>r[1]);
+
+  let mitBild=0;
+  const zeilen=[];
+  for(let i=0;i<S.items.length;i++){
+    const it=S.items[i];
+    let url='';
+    if(it.photo){ url=await bildURL(it.photo); if(url) mitBild++; }
+    const z=(it.zust||'').toLowerCase();
+    const kl = z.includes('defekt') ? 'rot' : z.includes('mangel') ? 'gelb'
+             : it.status==='ausgebaut' ? 'orange'
+             : it.status==='eingebaut' ? 'blau' : (i%2?'hell':'');
+    zeilen.push(`<tr class="${kl}">
+      <td class="nr">${String(it.nr).padStart(3,'0')}</td>
+      <td class="foto">${url?`<img src="${url}" alt="">`:'<span class="kein">kein Foto</span>'}</td>
+      <td>${esc(it.name)}</td><td>${esc(it.ort)}</td>
+      <td class="mo">${esc(it.ident)}</td><td class="mo">${esc(it.serie)}</td>
+      <td class="mo ce">${esc(it.rev)}</td><td class="mo">${esc(it.ver)}</td>
+      <td>${esc(it.herst)}</td><td>${esc(it.zust)}</td>
+      <td>${esc(it.bem)}</td><td>${esc(it.status)}</td><td class="ce">${esc(it.tausch)}</td>
+    </tr>`);
+  }
+
+  const w=wurzel;
+  const css=`@page{size:A4 landscape;margin:10mm}
+${w}{font:12px/1.4 -apple-system,"Segoe UI",Roboto,sans-serif;color:#152029;background:#fff}
+${w} h1{font-size:16px;background:#1F3547;color:#fff;padding:9px 12px;margin:0 0 12px;border-radius:4px}
+${w} .kopf{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 18px;margin-bottom:14px}
+${w} .kopf div{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #e6ecf2}
+${w} .kopf b{color:#44586B;font-size:11px;min-width:150px;flex:none}
+${w} table{border-collapse:collapse;width:100%}
+${w} th{background:#1F3547;color:#fff;font-size:10.5px;padding:6px 5px;border:1px solid #B9C6D2;text-align:center}
+${w} td{border:1px solid #B9C6D2;padding:5px;vertical-align:middle;font-size:11px;color:#152029}
+${w} td.mo{font-family:ui-monospace,Consolas,monospace}
+${w} td.nr{font-weight:700;text-align:center;width:34px}
+${w} td.ce{text-align:center}
+${w} td.foto{width:124px;text-align:center;padding:3px}
+${w} td.foto img{max-width:114px;max-height:88px;display:block;margin:auto;border:1px solid #ccd6e0}
+${w} .kein{color:#9aa9b6;font-size:10px;font-style:italic}
+${w} tr.hell{background:#F2F6FA} ${w} tr.gelb{background:#FFF3CD} ${w} tr.rot{background:#F8D7DA}
+${w} tr.orange{background:#FDE2CF} ${w} tr.blau{background:#D6ECFF}
+${w} footer{display:block;margin-top:12px;font-size:10px;color:#7d8c9a;font-style:italic}
+${w} tr{page-break-inside:avoid} ${w} thead{display:table-header-group}`;
+
+  const rumpf=`<h1>Bauteilerfassung – Anhang zum technischen Protokoll</h1>
+<div class="kopf">${kopf.map(r=>`<div><b>${esc(r[0])}</b><span>${esc(r[1])}</span></div>`).join('')}</div>
+<table><thead><tr>${XCOLS.map(c=>`<th>${esc(c[1])}</th>`).join('')}</tr></thead>
+<tbody>${zeilen.join('')}</tbody></table>
+<footer>Erstellt ${new Date().toLocaleString('de-DE')} mit PartGrid v${VERSION} ·
+${S.items.length} Bauteile, davon ${mitBild} mit Foto ·
+Farben: rot = defekt, gelb = Mangel, orange = ausgebautes Altteil, blau = eingebautes Neuteil</footer>`;
+
+  return {css, rumpf, mitBild};
+}
+
+/* Bericht in der App anzeigen – kein neues Fenster, nichts kann blockiert werden. */
+async function berichtAnzeigen(){
+  if(!S.items.length){toast('Keine Bauteile erfasst');return}
+  const b=$('btnHtml'); b.disabled=true; b.textContent='⏳ Erzeuge Bericht…';
+  try{
+    const {css,rumpf,mitBild}=await berichtTeile('#bericht');
+    const el=$('bericht');
+    el.innerHTML=`<style>${css}</style>
+      <div class="leiste">
+        <button onclick="window.print()" class="btn-primary">🖨️ Drucken / PDF</button>
+        <button onclick="berichtSchliessen()">✕ Schließen</button>
+      </div>${rumpf}`;
+    el.classList.remove('hidden');
+    el.scrollTop=0;
+    document.body.style.overflow='hidden';
+    toast(`Bericht mit ${mitBild} Foto(s) · PDF über „Drucken"`,4000);
+  }catch(err){ console.error(err); toast('Bericht fehlgeschlagen: '+err.message,5000); }
+  b.disabled=false; b.textContent='👁️ Bericht ansehen (PDF-fähig)';
+}
+function berichtSchliessen(){
+  $('bericht').classList.add('hidden'); $('bericht').innerHTML='';
+  document.body.style.overflow='';
+}
+
 async function exportHtml(oeffnen){
+  if(oeffnen) return berichtAnzeigen();
   if(!S.items.length){toast('Keine Bauteile erfasst');return}
   const b=$('btnHtml'); b.disabled=true; b.textContent='⏳ Erzeuge Bericht…';
   try{
     const e=S.einsatz;
-    const kopf=[
-      ['Fahrzeug-/Loknummer',e.fzg],['Baureihe / Fahrzeugtyp',e.br],
-      ['Datum',fmtDate(e.datum)],['Kilometerstand',e.km?e.km+' km':''],
-      ['Anlass',e.anlass],['Protokoll-/Auftragsnr.',e.prot],
-      ['Bearbeiter',e.bearb],['Werk / Standort',e.ort],['Bemerkung',e.bem]
-    ].filter(r=>r[1]);
-
-    const zeilen=[];
-    for(let i=0;i<S.items.length;i++){
-      const it=S.items[i];
-      const url=it.photo? await bildURL(it.photo) : '';
-      const kl = (it.zust||'').toLowerCase().includes('defekt') ? 'rot'
-               : (it.zust||'').toLowerCase().includes('mangel') ? 'gelb'
-               : it.status==='ausgebaut' ? 'orange'
-               : it.status==='eingebaut' ? 'blau' : (i%2?'hell':'');
-      zeilen.push(`<tr class="${kl}">
-        <td class="nr">${String(it.nr).padStart(3,'0')}</td>
-        <td class="foto">${url?`<img src="${url}" alt="">`:'<span class="kein">kein Foto</span>'}</td>
-        <td>${esc(it.name)}</td><td>${esc(it.ort)}</td>
-        <td class="mo">${esc(it.ident)}</td><td class="mo">${esc(it.serie)}</td>
-        <td class="mo ce">${esc(it.rev)}</td><td class="mo">${esc(it.ver)}</td>
-        <td>${esc(it.herst)}</td><td>${esc(it.zust)}</td>
-        <td>${esc(it.bem)}</td><td>${esc(it.status)}</td><td class="ce">${esc(it.tausch)}</td>
-      </tr>`);
-    }
-
+    const {css,rumpf,mitBild}=await berichtTeile('body');
     const html=`<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Bauteilerfassung ${esc(e.fzg)} ${esc(fmtDate(e.datum))}</title>
-<style>
-@page{size:A4 landscape;margin:10mm}
-*{box-sizing:border-box}
-body{font:12px/1.4 -apple-system,"Segoe UI",Roboto,sans-serif;color:#152029;margin:0;padding:14px;background:#fff}
-h1{font-size:16px;background:#1F3547;color:#fff;padding:9px 12px;margin:0 0 12px;border-radius:4px}
-.kopf{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 18px;margin-bottom:14px}
-.kopf div{display:flex;gap:8px;padding:2px 0;border-bottom:1px solid #e6ecf2}
-.kopf b{color:#44586B;font-size:11px;min-width:145px}
-table{border-collapse:collapse;width:100%}
-th{background:#1F3547;color:#fff;font-size:10.5px;padding:6px 5px;border:1px solid #B9C6D2;text-align:center}
-td{border:1px solid #B9C6D2;padding:5px;vertical-align:middle;font-size:11px}
-td.mo{font-family:ui-monospace,Consolas,monospace;font-size:11px}
-td.nr{font-weight:700;text-align:center;width:34px}
-td.ce{text-align:center}
-td.foto{width:120px;text-align:center;padding:3px}
-td.foto img{max-width:112px;max-height:86px;display:block;margin:auto;border:1px solid #ccd6e0}
-.kein{color:#9aa9b6;font-size:10px;font-style:italic}
-tr.hell{background:#F2F6FA} tr.gelb{background:#FFF3CD} tr.rot{background:#F8D7DA}
-tr.orange{background:#FDE2CF} tr.blau{background:#D6ECFF}
-footer{margin-top:12px;font-size:10px;color:#7d8c9a;font-style:italic}
-tr{page-break-inside:avoid} thead{display:table-header-group}
-@media print{body{padding:0}}
-</style></head><body>
-<h1>Bauteilerfassung – Anhang zum technischen Protokoll</h1>
-<div class="kopf">${kopf.map(r=>`<div><b>${esc(r[0])}</b><span>${esc(r[1])}</span></div>`).join('')}</div>
-<table><thead><tr>${XCOLS.map(c=>`<th>${esc(c[1])}</th>`).join('')}</tr></thead>
-<tbody>${zeilen.join('')}</tbody></table>
-<footer>Erstellt ${new Date().toLocaleString('de-DE')} mit PartGrid v${VERSION} · ${S.items.length} Bauteile ·
-Farben: rot = defekt, gelb = Mangel, orange = ausgebautes Altteil, blau = eingebautes Neuteil</footer>
+<style>*{box-sizing:border-box}body{margin:0;padding:14px}
+${css}</style></head><body>
+${rumpf}
 </body></html>`;
-
-    if(oeffnen){
-      const w=window.open('','_blank');
-      if(w){ w.document.write(html); w.document.close(); toast('Bericht geöffnet – zum PDF: Teilen › Drucken',4000); }
-      else toast('Bitte Pop-ups für diese Seite erlauben');
-    } else {
-      const datei=new File([html],baseName()+'.html',{type:'text/html'});
-      await shareOrDownload([datei]);
-      toast('Bericht erstellt');
-    }
+    const datei=new File([html],baseName()+'.html',{type:'text/html'});
+    await shareOrDownload([datei]);
+    toast(`Bericht erstellt · ${mitBild} Foto(s) enthalten`);
   }catch(err){ console.error(err); toast('Bericht fehlgeschlagen: '+err.message,5000); }
   b.disabled=false; b.textContent='👁️ Bericht ansehen (PDF-fähig)';
 }
