@@ -199,7 +199,15 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
     <div class="row" style="margin-top:10px">
       <button class="btn-blue" onclick="retakeShortcut()">🔄 Neu aufnehmen</button>
       <button onclick="retake()">🖼️ Aus Galerie</button>
-      <button onclick="ocrLocal()" id="btnOcr">🔍 Text</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button onclick="ocrLocal()" id="btnOcr">🔍 Text erkennen</button>
+      <button onclick="pasteText()">📋 Text einfügen</button>
+    </div>
+    <div class="hint" style="font-size:12px">
+      „Text einfügen" nutzt Apples Erkennung: Foto oben lange gedrückt halten →
+      <b>Text auswählen</b> → alles markieren → <b>Kopieren</b> → hier antippen.
+      Meist treffsicherer als „Text erkennen".
     </div>
   </div>
 
@@ -524,7 +532,9 @@ $('fileInput').addEventListener('change',async ev=>{
   retakeMode=false;
   it.photo='p'+it.id; it.file=it.file||fileName(it);
   await put('photos',it.photo,await shrink(f,2000,.85));
+  it.diag='';
   await save(); openItem(it.id);
+  if(!it.ocr) ocrLocal(true);        // Galeriebild gleich durch die Texterkennung schicken
 });
 let retakeMode=false;
 function retake(){retakeMode=true; $('fileInput').click()}
@@ -686,9 +696,40 @@ function tokens(txt){
   return out.slice(0,28);
 }
 
-/* ---------------- Lokale OCR (Notnagel, braucht Internet beim 1. Mal) ------- */
-async function ocrLocal(){
-  if(!CUR||!CUR.photo){toast('Kein Foto in der App gespeichert');return}
+/* ---------------- Texterkennung in der App ---------------------------------- */
+
+/* Typenschilder sind oft dunkel und flau. Vor der Erkennung aufbereiten:
+   vergrößern, in Graustufen wandeln, Kontrast auf den vollen Bereich ziehen. */
+async function aufbereiten(blob){
+  const img=await createImageBitmap(blob);
+  const sc=Math.min(2, Math.max(1, 1600/Math.max(img.width,img.height)));
+  const c=document.createElement('canvas');
+  c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
+  const x=c.getContext('2d',{willReadFrequently:true});
+  x.drawImage(img,0,0,c.width,c.height);
+  const bild=x.getImageData(0,0,c.width,c.height), p=bild.data;
+  let min=255,max=0;
+  for(let i=0;i<p.length;i+=4){
+    const g=(p[i]*0.299+p[i+1]*0.587+p[i+2]*0.114)|0;
+    p[i]=p[i+1]=p[i+2]=g;
+    if(g<min)min=g; if(g>max)max=g;
+  }
+  const spanne=Math.max(1,max-min);
+  for(let i=0;i<p.length;i+=4){
+    const v=Math.max(0,Math.min(255,Math.round((p[i]-min)/spanne*255)));
+    p[i]=p[i+1]=p[i+2]=v;
+  }
+  x.putImageData(bild,0,0);
+  return c;
+}
+
+function felderAusCur(){
+  $('d_ident').value=CUR.ident; $('d_serie').value=CUR.serie;
+  $('d_rev').value=CUR.rev; $('d_ver').value=CUR.ver; $('d_herst').value=CUR.herst;
+}
+
+async function ocrLocal(automatisch){
+  if(!CUR||!CUR.photo){ if(!automatisch) toast('Kein Foto in der App gespeichert'); return }
   const b=$('btnOcr'); b.disabled=true; b.textContent='⏳ Erkenne…';
   try{
     if(!window.Tesseract){
@@ -697,14 +738,35 @@ async function ocrLocal(){
         s.onload=res;s.onerror=rej;document.head.appendChild(s)});
     }
     const blob=await get('photos',CUR.photo);
-    const r=await Tesseract.recognize(blob,'deu+eng');
-    CUR.ocr=(r.data.text||'').trim();
-    applyParse(CUR);
-    $('d_ident').value=CUR.ident; $('d_serie').value=CUR.serie;
-    $('d_rev').value=CUR.rev; $('d_ver').value=CUR.ver; $('d_herst').value=CUR.herst;
-    renderOcr(CUR); await save(); toast('Text erkannt');
-  }catch(e){ console.error(e); toast('Erkennung nicht möglich (Internet nötig). Tipp: Foto lange gedrückt halten → Text auswählen.',4500); }
+    const r=await Tesseract.recognize(await aufbereiten(blob),'deu+eng');
+    const txt=(r.data.text||'').trim();
+    if(!txt){ toast('Kein Text gefunden. Tipp: Foto lange gedrückt halten → Text auswählen → Kopieren → „Text einfügen".',5000); }
+    else{
+      CUR.ocr=txt; applyParse(CUR); felderAusCur(); renderOcr(CUR); await save();
+      toast('Text erkannt');
+    }
+  }catch(e){
+    console.error(e);
+    toast(automatisch
+      ? 'Automatische Erkennung nicht möglich – nimm „Text einfügen".'
+      : 'Erkennung nicht möglich (beim ersten Mal ist Internet nötig). Alternative: „Text einfügen".',5000);
+  }
   b.disabled=false; b.textContent='🔍 Text erkennen';
+}
+
+/* Apples Live-Text: Der Nutzer kopiert den Text vom Foto, wir werten ihn hier aus. */
+async function pasteText(){
+  if(!CUR){toast('Kein Bauteil ausgewählt');return}
+  let txt='';
+  try{ txt=await navigator.clipboard.readText(); }
+  catch(e){
+    toast('Zwischenablage nicht lesbar. Text bitte direkt ins Feld einfügen.',4000);
+    return;
+  }
+  txt=(txt||'').trim();
+  if(!txt){toast('Zwischenablage ist leer');return}
+  CUR.ocr=txt; applyParse(CUR); felderAusCur(); renderOcr(CUR);
+  await save(); toast('Text übernommen und zugeordnet');
 }
 
 /* ---------------- Export ---------------- */
