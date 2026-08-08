@@ -165,6 +165,8 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
       <option>Umbau / Nachrüstung</option>
       <option>Sonstiges</option>
     </select>
+    <label>SW-Release</label>
+    <input id="e_sw" placeholder="z.B. 3.12.4 / Stand nach Update" autocapitalize="characters">
     <label>Protokoll-/Auftragsnummer</label>
     <input id="e_prot" placeholder="Bezug zum Originalprotokoll">
     <label>Bearbeiter</label>
@@ -352,7 +354,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.17.1';
+const VERSION = '0.18.0';
 
 /* Reihenfolge = Abgehreihenfolge am Fahrzeug. Wird bewusst NICHT sortiert.
    Frei erweiterbar unter Einsatz › Einstellungen. */
@@ -423,7 +425,7 @@ let LISTEN_LAUF=0, DETAIL_LAUF=0;
 
 /* ---------------- Zustand ---------------- */
 let S={
-  einsatz:{fzg:'',br:'',datum:'',km:'',anlass:'Fristarbeit',prot:'',bearb:'',ort:'',bem:''},
+  einsatz:{fzg:'',br:'',datum:'',km:'',anlass:'Fristarbeit',sw:'',prot:'',bearb:'',ort:'',bem:''},
   items:[], katalog:DEFAULT_KATALOG.slice(), baureihen:[], orte:[], seq:0,
   zuletztName:[], zuletztOrt:[],
   shortcut:'PartGrid Foto', pending:''
@@ -521,6 +523,7 @@ function loadEinsatzForm(){
   $('e_fzg').value=e.fzg; $('e_br').value=e.br;
   $('e_datum').value=e.datum||new Date().toISOString().slice(0,10);
   $('e_km').value=e.km; $('e_anlass').value=e.anlass||'Fristarbeit';
+  $('e_sw').value=e.sw||'';
   $('e_prot').value=e.prot||''; $('e_bearb').value=e.bearb||'';
   $('e_ort').value=e.ort||''; $('e_bem').value=e.bem||'';
   $('s_sc').value=S.shortcut; $('s_kat').value=S.katalog.join('\n');
@@ -530,7 +533,8 @@ function saveEinsatz(){
   const e=S.einsatz;
   e.fzg=$('e_fzg').value.trim(); e.br=$('e_br').value.trim();
   e.datum=$('e_datum').value; e.km=$('e_km').value.trim();
-  e.anlass=$('e_anlass').value; e.prot=$('e_prot').value.trim();
+  e.anlass=$('e_anlass').value; e.sw=$('e_sw').value.trim();
+  e.prot=$('e_prot').value.trim();
   e.bearb=$('e_bearb').value.trim(); e.ort=$('e_ort').value.trim();
   e.bem=$('e_bem').value.trim();
   if(e.br && !S.baureihen.includes(e.br)) S.baureihen.push(e.br);
@@ -1071,7 +1075,7 @@ function csvText(){
   const e=S.einsatz, q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
   const head=[
     ['Fahrzeug-/Loknummer',e.fzg],['Baureihe',e.br],['Datum',fmtDate(e.datum)],
-    ['Kilometerstand',e.km],['Anlass',e.anlass],['Protokollnummer',e.prot],
+    ['Kilometerstand',e.km],['Anlass',e.anlass],['SW-Release',e.sw],['Protokollnummer',e.prot],
     ['Bearbeiter',e.bearb],['Werk / Standort',e.ort],['Bemerkung',e.bem],
     ['Exportiert am',new Date().toLocaleString('de-DE')]
   ].map(r=>q(r[0])+';'+q(r[1])).join('\r\n');
@@ -1288,7 +1292,8 @@ async function exportXlsx(){
     const kopf=[
       ['Fahrzeug-/Loknummer', e.fzg], ['Baureihe / Fahrzeugtyp', e.br],
       ['Datum', fmtDate(e.datum)], ['Kilometerstand', e.km?e.km+' km':''],
-      ['Anlass', e.anlass], ['Protokoll-/Auftragsnr.', e.prot],
+      ['Anlass', e.anlass], ['SW-Release', e.sw],
+      ['Protokoll-/Auftragsnr.', e.prot],
       ['Bearbeiter', e.bearb], ['Werk / Standort', e.ort],
       ['Bemerkung', e.bem]
     ].map(([k,v])=>[k, v||'–']);
@@ -1446,7 +1451,7 @@ async function berichtTeile(wurzel){
   const kopf=[
     ['Fahrzeug-/Loknummer',e.fzg],['Baureihe / Fahrzeugtyp',e.br],
     ['Datum',fmtDate(e.datum)],['Kilometerstand',e.km?e.km+' km':''],
-    ['Anlass',e.anlass],['Protokoll-/Auftragsnr.',e.prot],
+    ['Anlass',e.anlass],['SW-Release',e.sw],['Protokoll-/Auftragsnr.',e.prot],
     ['Bearbeiter',e.bearb],['Werk / Standort',e.ort],['Bemerkung',e.bem]
   ].filter(r=>r[1]);
 
@@ -1558,6 +1563,7 @@ function renderExport(){
     <div class="kv"><span>Datum</span><span>${esc(fmtDate(e.datum)||'—')}</span></div>
     <div class="kv"><span>Kilometerstand</span><span>${esc(e.km||'—')}</span></div>
     <div class="kv"><span>Anlass</span><span>${esc(e.anlass||'—')}</span></div>
+    <div class="kv"><span>SW-Release</span><span>${esc(e.sw||'—')}</span></div>
     <div class="kv"><span>Bauteile gesamt</span><span>${S.items.length}</span></div>
     <div class="kv"><span>davon ausgebaut</span><span>${cnt(i=>i.status==='ausgebaut')}</span></div>
     <div class="kv"><span>davon eingebaut</span><span>${cnt(i=>i.status==='eingebaut')}</span></div>
