@@ -183,9 +183,11 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
     <input id="s_sc" placeholder="PartGrid Foto">
     <div class="hint">Muss exakt so heißen wie der Kurzbefehl in der Kurzbefehle-App.</div>
     <label>Bauteil-Katalog (ein Name pro Zeile)</label>
-    <textarea id="s_kat" style="min-height:180px" class="mono"></textarea>
-    <div class="hint">Diese Namen erscheinen zur Auswahl. Eigene Eingaben werden automatisch ergänzt.</div>
+    <textarea id="s_kat" style="min-height:200px" class="mono"></textarea>
+    <div class="hint">Die <b>Reihenfolge bleibt erhalten</b> – am besten so sortieren, wie du das
+      Fahrzeug abgehst. Selbst eingetippte Namen werden hinten angehängt.</div>
     <button class="btn-big" onclick="saveSettings()">Einstellungen speichern</button>
+    <button onclick="katalogZuruecksetzen()" style="width:100%">↺ Katalog auf Standardliste zurücksetzen</button>
     <div class="sep"></div>
     <button class="btn-bad btn-big" onclick="resetAll()">Alle Daten löschen (Neustart)</button>
   </div>
@@ -245,16 +247,15 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
   <div class="card">
     <h2>Bauteil</h2>
     <label>Technischer Name *</label>
-    <input id="d_name" list="l_kat" placeholder="Auswählen oder eintippen">
-    <datalist id="l_kat"></datalist>
+    <div class="row">
+      <input id="d_name" placeholder="aus Katalog wählen oder tippen">
+      <button style="flex:0 0 104px" class="btn-blue" onclick="waehleName()">📋 Katalog</button>
+    </div>
     <label>Einbauort</label>
-    <input id="d_ort" list="l_ort" placeholder="z.B. Untergestell links, Maschinenraum">
-    <datalist id="l_ort">
-      <option>Untergestell</option><option>Untergestell links</option><option>Untergestell rechts</option>
-      <option>Maschinenraum</option><option>Führerraum 1</option><option>Führerraum 2</option>
-      <option>Dach</option><option>Schaltschrank</option><option>Drehgestell 1</option>
-      <option>Drehgestell 2</option><option>Fahrgastraum</option><option>Wagen 1</option><option>Wagen 2</option>
-    </datalist>
+    <div class="row">
+      <input id="d_ort" placeholder="z.B. Untergestell links">
+      <button style="flex:0 0 104px" onclick="waehleOrt()">📍 Liste</button>
+    </div>
     <label>Ident-/Materialnummer</label>
     <input id="d_ident" class="mono" autocapitalize="characters">
     <label>Seriennummer</label>
@@ -351,21 +352,26 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.14.0';
+const VERSION = '0.17.0';
 
+/* Reihenfolge = Abgehreihenfolge am Fahrzeug. Wird bewusst NICHT sortiert.
+   Frei erweiterbar unter Einsatz › Einstellungen. */
 const DEFAULT_KATALOG = [
-"Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
-"Zugsicherung LZB","ETCS-Fahrzeugrechner (EVC)","ETCS Balisenantenne","GSM-R Zugfunkgerät",
-"GSM-R Antenne","Sifa-Gerät","Geschwindigkeitsmessanlage","Wegimpulsgeber / Radar",
-"Registriergerät","Bremssteuergerät","Bremssteuerventil","Luftpresser / Kompressor",
-"Lufttrockner","Hauptluftbehälter","Federspeicherbremse","Traktionsstromrichter",
-"Hilfsbetriebeumrichter","Bordnetzumrichter","Batterieladegerät","Batterie",
-"Fahrmotor","Getriebe","Radsatzlager","Dieselmotor","Kühlanlage","Hauptschalter",
-"Stromabnehmer","Haupttransformator","Erdungsschalter","Türsteuergerät","Türantrieb",
-"Klimagerät Führerraum","Klimagerät Fahrgastraum","Sandungsanlage","Spurkranzschmierung",
-"Fahrgastinformationssystem (FIS)","Videoaufzeichnungsgerät","WLAN-Router",
-"Brandmeldeanlage","Feuerlöschanlage","Scharfenbergkupplung","Zugbus-Gateway",
-"Führerraumdisplay (MMI)","Fahrschalter","Netzstromabnehmer-Steuerung"
+"SDP (Speed Distance Unit)",
+"TSG",
+"ATP/OPT",
+"PZB Fahrzeugmagnet 1",
+"PZB Fahrzeugmagnet 2",
+"LZB Empfangsantenne 1",
+"LZB Empfangsantenne 2",
+"LZB Sendeantenne 1",
+"LZB Sendeantenne 2",
+"Radar",
+"Cau",
+"BTM",
+"GSMR-Modem 1",
+"GSMR-Modem 2",
+"CoHp"
 ];
 
 /* ---------------- Speicher (IndexedDB) ---------------- */
@@ -418,7 +424,8 @@ let LISTEN_LAUF=0, DETAIL_LAUF=0;
 /* ---------------- Zustand ---------------- */
 let S={
   einsatz:{fzg:'',br:'',datum:'',km:'',anlass:'Fristarbeit',prot:'',bearb:'',ort:'',bem:''},
-  items:[], katalog:DEFAULT_KATALOG.slice(), baureihen:[], seq:0,
+  items:[], katalog:DEFAULT_KATALOG.slice(), baureihen:[], orte:[], seq:0,
+  zuletztName:[], zuletztOrt:[],
   shortcut:'PartGrid Foto', pending:''
 };
 let CUR=null;            // aktuell bearbeitetes Bauteil
@@ -429,6 +436,60 @@ const save=()=>put('kv','state',JSON.parse(JSON.stringify(S)));
 
 function toast(m,ms=2200){const t=$('toast');t.textContent=m;t.classList.add('on');
   clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),ms)}
+
+/* ---------------- Auswahllisten ----------------
+   Die Vorschlagsliste des Browsers (datalist) funktioniert auf dem iPhone
+   nicht zuverlässig – deshalb eine eigene Auswahl mit Suche. */
+const ORTE=['Untergestell','Untergestell links','Untergestell rechts','Drehgestell 1',
+  'Drehgestell 2','Maschinenraum','Führerraum 1','Führerraum 2','Schaltschrank','Dach',
+  'Fahrgastraum','Wagen 1','Wagen 2','Wagen 3','Batteriekasten','Dachcontainer'];
+
+let pickZiel=null;
+function pickerOeffnen(titel, eintraege, zuletzt, cb){
+  pickZiel=cb;
+  $('sheet').innerHTML=`
+    <h2>${esc(titel)}</h2>
+    <input id="pkSuche" placeholder="Suchen oder eigenen Namen tippen" autocomplete="off" autocapitalize="sentences">
+    <div id="pkListe" style="margin-top:12px;max-height:56vh;overflow:auto"></div>
+    <button style="width:100%;margin-top:10px" onclick="pickerSchliessen()">Abbrechen</button>`;
+  $('modal').classList.add('on');
+  const suche=$('pkSuche');
+  const knopf=w=>`<button class="pick" data-w="${esc(w)}">${esc(w)}</button>`;
+  const zeichnen=()=>{
+    const roh=suche.value.trim(), q=roh.toLowerCase();
+    const treffer=eintraege.filter(x=>x.toLowerCase().includes(q));
+    let h='';
+    if(roh && !eintraege.some(x=>x.toLowerCase()===q))
+      h+=`<button class="pick btn-primary" data-w="${esc(roh)}">„${esc(roh)}" übernehmen</button>`;
+    const oben=q?[]:(zuletzt||[]).slice(0,6);
+    if(oben.length) h+=`<div class="hint">Zuletzt verwendet</div>`+oben.map(knopf).join('');
+    h+=(oben.length?`<div class="hint">Alle Einträge</div>`:'');
+    h+=treffer.length? treffer.map(knopf).join('')
+                     : `<div class="hint">Kein Eintrag gefunden – Namen oben eintippen und übernehmen.</div>`;
+    $('pkListe').innerHTML=h;
+    [...$('pkListe').querySelectorAll('button')].forEach(b=>b.onclick=()=>{
+      const w=b.getAttribute('data-w'); pickerSchliessen(); if(pickZiel) pickZiel(w);
+    });
+  };
+  suche.addEventListener('input',zeichnen);
+  zeichnen();
+}
+function pickerSchliessen(){ $('modal').classList.remove('on'); pickZiel=null; }
+
+function waehleName(){
+  pickerOeffnen('Technischer Name', S.katalog, S.zuletztName, w=>{
+    $('d_name').value=w; lastField=$('d_ident'); toast(w);
+  });
+}
+function waehleOrt(){
+  const liste=Array.from(new Set([...(S.orte||[]), ...ORTE])).sort((a,b)=>a.localeCompare(b,'de'));
+  pickerOeffnen('Einbauort', liste, S.zuletztOrt, w=>{ $('d_ort').value=w; toast(w); });
+}
+function merkeZuletzt(feld, wert){
+  if(!wert) return;
+  const l=S[feld]||[];
+  S[feld]=[wert, ...l.filter(x=>x!==wert)].slice(0,8);
+}
 
 /* ---------------- Navigation ---------------- */
 function go(v){
@@ -479,8 +540,16 @@ function saveSettings(){
   S.katalog=$('s_kat').value.split('\n').map(s=>s.trim()).filter(Boolean);
   save(); fillKatalog(); toast('Einstellungen gespeichert');
 }
+/* Nur Dubletten entfernen – die eingegebene Reihenfolge bleibt erhalten,
+   damit sie der Reihenfolge am Fahrzeug entsprechen kann. */
 function fillKatalog(){
-  $('l_kat').innerHTML=S.katalog.map(k=>`<option value="${esc(k)}">`).join('');
+  S.katalog=Array.from(new Set(S.katalog.filter(Boolean)));
+}
+function katalogZuruecksetzen(){
+  if(!confirm('Katalog auf die hinterlegte Standardliste zurücksetzen? Selbst ergänzte Namen gehen verloren.'))return;
+  S.katalog=DEFAULT_KATALOG.slice();
+  $('s_kat').value=S.katalog.join('\n');
+  save().then(()=>toast('Katalog zurückgesetzt'));
 }
 function resetAll(){
   if(!confirm('Wirklich ALLE Daten löschen? Nicht exportierte Erfassungen gehen verloren.'))return;
@@ -796,7 +865,10 @@ function saveItem(){
   it.rev=$('d_rev').value.trim(); it.ver=$('d_ver').value.trim();
   it.herst=$('d_herst').value.trim(); it.zust=$('d_zust').value;
   it.bem=$('d_bem').value.trim(); it.status=$('d_status').value;
-  if(it.name && !S.katalog.includes(it.name)){S.katalog.push(it.name);S.katalog.sort();fillKatalog()}
+  if(it.name && !S.katalog.includes(it.name)) S.katalog.push(it.name);   // hinten anhängen, Reihenfolge bleibt
+  if(it.ort && !(S.orte||[]).includes(it.ort) && !ORTE.includes(it.ort)){ S.orte=[...(S.orte||[]),it.ort] }
+  merkeZuletzt('zuletztName',it.name);
+  merkeZuletzt('zuletztOrt',it.ort);
   if(!it.file && it.photo) it.file=fileName(it);
   save().then(()=>{toast('Gespeichert');go('liste')});
 }
