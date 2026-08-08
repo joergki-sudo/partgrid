@@ -108,7 +108,10 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
 <body>
 
 <header>
-  <h1 id="hTitle">PartGrid – Bauteilerfassung</h1>
+  <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+    <h1 id="hTitle">PartGrid – Bauteilerfassung</h1>
+    <span id="hVer" class="tag" style="background:#22303f;color:#8fa8bf;margin:0">v?</span>
+  </div>
   <div class="ctx" id="hCtx">Kein Einsatz angelegt</div>
 </header>
 
@@ -301,6 +304,15 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    PartGrid – Bauteilerfassung
    Einzeldatei-Web-App. Daten liegen offline im Browser (IndexedDB).
    ========================================================================= */
+
+/* ======================= VERSION =======================
+   Bei JEDER Änderung hochzählen – und in sw.js die Zeile
+   const V = 'partgrid-vX.Y.Z'  auf denselben Wert setzen.
+   Die Nummer steht oben rechts in der App. Stimmt sie nicht
+   mit der zuletzt hochgeladenen überein, zeigt das Handy
+   noch die alte Fassung: nochmal neu laden.
+   ======================================================= */
+const VERSION = '0.9.0';
 
 const DEFAULT_KATALOG = [
 "Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
@@ -863,7 +875,7 @@ async function exportZip(){
   toast('Erzeuge Export…');
   const files=[];
   files.push({name:'bauteile.csv',data:new TextEncoder().encode(csvText())});
-  const payload={app:'PartGrid',version:1,exportiert:new Date().toISOString(),
+  const payload={app:'PartGrid',version:1,appVersion:VERSION,exportiert:new Date().toISOString(),
     einsatz:S.einsatz,spalten:COLS,bauteile:S.items};
   files.push({name:'daten.json',data:new TextEncoder().encode(JSON.stringify(payload,null,2))});
   for(const it of S.items){
@@ -947,6 +959,8 @@ function renderExport(){
   }catch(e){console.warn(e)}
   if(!S.katalog||!S.katalog.length) S.katalog=DEFAULT_KATALOG.slice();
   if(!S.einsatz.datum) S.einsatz.datum=new Date().toISOString().slice(0,10);
+  $('hVer').textContent='v'+VERSION;
+  document.title='PartGrid v'+VERSION;
   loadEinsatzForm(); fillKatalog(); renderHeader();
   const got=handleIncoming();
   if(!got) go(S.einsatz.fzg?'liste':'einsatz');

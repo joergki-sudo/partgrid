@@ -1,6 +1,7 @@
 /* PartGrid Service Worker – macht die App offline nutzbar.
-   Bei Änderungen an index.html die Version hochzählen! */
-const V = 'partgrid-v8';
+   WICHTIG: Diese Nummer muss immer mit  const VERSION  in index.html
+   übereinstimmen. Wird sie nicht hochgezählt, bleibt die alte Fassung im Cache. */
+const V = 'partgrid-v0.9.0';
 const ASSETS = [
   './',
   './index.html',
