@@ -187,6 +187,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
   <div class="card">
     <img id="d_img" class="photo hidden" alt="Bauteilfoto">
     <div id="d_nofile" class="hint hidden"></div>
+    <div id="d_diag" class="hint mono hidden" style="font-size:11px;color:#6d8299"></div>
     <div id="d_ocrwrap" class="hidden" style="margin-top:10px">
       <details open>
         <summary>Erkannter Text vom Typenschild</summary>
@@ -457,7 +458,11 @@ function handleIncoming(){
 /* Base64 aus dem Kurzbefehl: '+' kann unterwegs zu Leerzeichen werden – reparieren. */
 function b64fix(s){return String(s||'').replace(/^data:[^,]+,/,'').replace(/ /g,'+').replace(/[\r\n]/g,'')}
 function b64bytes(s){
-  const bin=atob(b64fix(s)); const a=new Uint8Array(bin.length);
+  /* Tolerant: Fremdzeichen weg, Polster weg, auf gültige Länge kürzen.
+     Ein abgeschnittenes JPEG zeigt der Browser trotzdem teilweise an. */
+  let t=b64fix(s).replace(/[^A-Za-z0-9+/=]/g,'').replace(/=+$/,'');
+  t=t.slice(0, Math.floor(t.length/4)*4);
+  const bin=atob(t); const a=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a;
 }
 function b64text(s){
@@ -474,11 +479,21 @@ async function createFromCapture(d){
   it.file=(d.file||d.filename||it.file||'')
             .replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'');
   if(it.photo){ await del('photos',it.photo); it.photo=''; }
-  if(d.thumb){
+  /* Diagnose: was ist wirklich angekommen? */
+  const rohThumb=b64fix(d.thumb||'');
+  it.diag=`OCR ${(it.ocr||'').length} Z. · Bilddaten ${rohThumb.length} Z.`;
+  if(rohThumb.length){
     try{
-      const blob=new Blob([b64bytes(d.thumb)],{type:'image/jpeg'});
+      const bytes=b64bytes(rohThumb);
+      const blob=new Blob([bytes],{type:'image/jpeg'});
       it.photo='p'+it.id; await put('photos',it.photo,blob);
-    }catch(err){console.warn('thumb',err)}
+      it.diag+=` → ${Math.round(bytes.length/1024)} kB Bild`;
+    }catch(err){
+      it.diag+=' → nicht lesbar: '+err.name;
+      console.warn('thumb',err);
+    }
+  } else {
+    it.diag+=' → kein Bild übergeben';
   }
   applyParse(it);
   if(!replace) S.items.push(it);
@@ -573,6 +588,9 @@ function openItem(id){
   else if(it.file){ nf.classList.remove('hidden');
     nf.innerHTML=`Foto liegt im Ordner des Kurzbefehls: <b class="mono">${esc(it.file)}</b>`; }
   else { nf.classList.remove('hidden'); nf.textContent='Kein Foto hinterlegt.'; }
+  const dg=$('d_diag');
+  dg.textContent=it.diag||'';
+  dg.classList.toggle('hidden',!it.diag);
   renderOcr(it);
   $('d_link').textContent = it.tausch ? 'Tauschvorgang: '+it.tausch : '';
   go('detail');
