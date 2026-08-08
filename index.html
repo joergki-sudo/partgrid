@@ -194,12 +194,19 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
 <!-- ============ LISTE ============ -->
 <section id="v-liste" class="view">
   <div id="noEinsatz" class="warnbar hidden">Bitte zuerst unter <b>Einsatz</b> die Fahrzeugnummer eintragen.</div>
-  <button class="btn-primary btn-big" onclick="startShortcut()">📷 &nbsp;Bauteil erfassen (Kurzbefehl)</button>
-  <div class="row" style="margin-bottom:12px">
-    <button onclick="fileInput.click()">🖼️ Foto aus Galerie</button>
+  <button class="btn-primary btn-big" onclick="kameraNeu()">📷 &nbsp;Bauteil fotografieren</button>
+  <div class="row" style="margin-bottom:8px">
+    <button onclick="fileInput.click()">🖼️ Galerie</button>
+    <button onclick="startShortcut()">⚡ Kurzbefehl</button>
     <button onclick="newBlank()">✏️ Ohne Foto</button>
   </div>
+  <div class="hint" style="margin-bottom:12px">
+    <b>Fotografieren</b> öffnet die normale Kamera mit Blitz und Zoom – das Bild bleibt in der App.
+    Danach für den Text: Foto lange gedrückt halten → <b>Text auswählen</b> → <b>Kopieren</b> →
+    <b>📋 Text einfügen</b>.
+  </div>
   <input type="file" id="fileInput" accept="image/*" class="hidden">
+  <input type="file" id="camInput" accept="image/*" capture="environment" class="hidden">
   <h2 id="listHead">Erfasste Bauteile</h2>
   <div id="list"></div>
 </section>
@@ -219,7 +226,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
       </details>
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn-blue" onclick="retakeShortcut()">🔄 Neu</button>
+      <button class="btn-blue" onclick="kameraErsetzen()">📷 Neu</button>
       <button onclick="retake()">🖼️ Galerie</button>
       <button onclick="drehen()" id="btnDreh">↻ Drehen</button>
     </div>
@@ -344,7 +351,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.13.0';
+const VERSION = '0.14.0';
 
 const DEFAULT_KATALOG = [
 "Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
@@ -595,6 +602,35 @@ function newBlank(){
   if(!S.einsatz.fzg){toast('Bitte zuerst die Fahrzeugnummer eintragen');go('einsatz');return}
   const it=newItem(); S.items.push(it); save(); openItem(it.id);
 }
+/* Direkt in die Kamera: capture="environment" öffnet die Rückkamera
+   mit der gewohnten Oberfläche – Blitz und Zoom inklusive. */
+function kameraNeu(){
+  if(!S.einsatz.fzg){toast('Bitte zuerst die Fahrzeugnummer eintragen');go('einsatz');return}
+  retakeMode=false; $('camInput').click();
+}
+function kameraErsetzen(){
+  if(!CUR)return; saveItemQuiet(); retakeMode=true; $('camInput').click();
+}
+
+async function bildUebernehmen(f){
+  const it = (CUR && retakeMode) ? CUR : newItem();
+  if(!(CUR&&retakeMode)) S.items.push(it);
+  retakeMode=false;
+  it.photo='p'+it.id; it.file=it.file||fileName(it);
+  bildVergessen(it.photo);
+  await put('photos',it.photo,await shrink(f,2000,.85));
+  it.diag='';
+  await save(); renderHeader(); openItem(it.id);
+  if(!it.ocr) ocrLocal(true);
+}
+
+$('camInput').addEventListener('change',async ev=>{
+  const f=ev.target.files[0]; ev.target.value='';
+  if(!f)return;
+  if(!S.einsatz.fzg){toast('Bitte zuerst die Fahrzeugnummer eintragen');go('einsatz');return}
+  await bildUebernehmen(f);
+});
+
 $('fileInput').addEventListener('change',async ev=>{
   const f=ev.target.files[0]; ev.target.value='';
   if(!f)return;
