@@ -421,7 +421,10 @@ async function startShortcut(replaceId){
   if(!S.einsatz.fzg){toast('Bitte zuerst die Fahrzeugnummer eintragen');go('einsatz');return}
   S.pending = replaceId || '';
   const nr = replaceId ? (S.items.find(i=>i.id===replaceId)||{}).nr : S.seq+1;
-  const ctx = `${S.einsatz.fzg}|${String(nr).padStart(3,'0')}|${(S.einsatz.datum||'').replace(/-/g,'')}`;
+  /* Fahrzeugnummer entschärfen: Ein Leerzeichen im Dateinamen würde die Rücksprung-
+     Adresse abschneiden – alles dahinter (ocr64, thumb) ginge verloren. */
+  const fzg = S.einsatz.fzg.replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'');
+  const ctx = `${fzg}|${String(nr).padStart(3,'0')}|${(S.einsatz.datum||'').replace(/-/g,'')}`;
   await save();
   /* Kein x-callback: Der Kurzbefehl ruft die App am Ende selbst per „URL öffnen" auf.
      Eine Rücksprung-Adresse hier würde Kurzbefehle nur einen Fehler melden lassen. */
