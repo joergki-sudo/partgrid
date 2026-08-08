@@ -197,8 +197,9 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
       </details>
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn-blue" onclick="retakeShortcut()">🔄 Neu aufnehmen</button>
-      <button onclick="retake()">🖼️ Aus Galerie</button>
+      <button class="btn-blue" onclick="retakeShortcut()">🔄 Neu</button>
+      <button onclick="retake()">🖼️ Galerie</button>
+      <button onclick="drehen()" id="btnDreh">↻ Drehen</button>
     </div>
     <div class="row" style="margin-top:8px">
       <button onclick="ocrLocal()" id="btnOcr">🔍 Text erkennen</button>
@@ -207,7 +208,8 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
     <div class="hint" style="font-size:12px">
       „Text einfügen" nutzt Apples Erkennung: Foto oben lange gedrückt halten →
       <b>Text auswählen</b> → alles markieren → <b>Kopieren</b> → hier antippen.
-      Meist treffsicherer als „Text erkennen".
+      Meist treffsicherer als „Text erkennen".<br>
+      Schild quer fotografiert? Erst <b>↻ Drehen</b>, dann wird neu gelesen.
     </div>
   </div>
 
@@ -485,7 +487,7 @@ async function createFromCapture(d){
   const replace = S.pending ? S.items.find(i=>i.id===S.pending) : null;
   S.pending='';
   const it = replace || newItem();
-  it.ocr=(d.ocr||d.text||'').trim();
+  setOcr(it, d.ocr||d.text||'');
   /* Dateinamen aus dem Kurzbefehl entschärfen (Leerzeichen, Sonderzeichen). */
   it.file=(d.file||d.filename||it.file||'')
             .replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'');
@@ -668,6 +670,37 @@ function saveItemQuiet(){
 }
 
 /* ---------------- OCR-Auswertung ---------------- */
+
+/* Quer fotografierte Schilder liest die Erkennung buchstabenweise untereinander:
+     3
+     E
+     G
+   Drei oder mehr solcher Einzelzeichen-Zeilen gehören zusammen und werden
+   wieder zu „3EG…" verbunden. Leerzeilen dazwischen stören nicht. */
+function zeilenZusammenfassen(txt){
+  const zeilen=String(txt||'').split(/\r?\n/);
+  const raus=[]; let puffer=[];
+  const leeren=()=>{
+    if(puffer.length>=3) raus.push(puffer.join(''));
+    else raus.push(...puffer);
+    puffer=[];
+  };
+  for(const z of zeilen){
+    const t=z.trim();
+    if(t.length===1){ puffer.push(t); continue; }
+    if(t==='' && puffer.length){ continue; }      // Lücke innerhalb einer Spalte
+    leeren(); raus.push(z);
+  }
+  leeren();
+  return raus.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+/* Einzige Stelle, an der erkannter Text gesetzt wird – egal ob vom Kurzbefehl,
+   der eingebauten Erkennung oder aus der Zwischenablage. */
+function setOcr(it,txt){
+  it.ocrRaw=String(txt||'').trim();
+  it.ocr=zeilenZusammenfassen(it.ocrRaw);
+}
 const PAT={
   serie:[/(?:serien[\s.\-_]*(?:nummer|nr)|serial[\s.\-_]*(?:number|no|nr)?|ser[\s.\-_]*nr|s\s*\/\s*n|\bsn)\b[\s.:=#\-]*([A-Z0-9][A-Z0-9\/.\-]{3,})/i],
   ident:[/(?:ident[\s.\-_]*(?:nummer|nr)|material[\s.\-_]*(?:nummer|nr)|mat[\s.\-_]*nr|sach[\s.\-_]*(?:nummer|nr)|teile[\s.\-_]*(?:nummer|nr)|artikel[\s.\-_]*(?:nummer|nr)|art[\s.\-_]*nr|bestell[\s.\-_]*nr|part[\s.\-_]*(?:number|no|nr)|p\s*\/\s*n|\bpn)\b[\s.:=#\-]*([A-Z0-9][A-Z0-9\/.\-]{3,})/i],
@@ -742,7 +775,7 @@ async function ocrLocal(automatisch){
     const txt=(r.data.text||'').trim();
     if(!txt){ toast('Kein Text gefunden. Tipp: Foto lange gedrückt halten → Text auswählen → Kopieren → „Text einfügen".',5000); }
     else{
-      CUR.ocr=txt; applyParse(CUR); felderAusCur(); renderOcr(CUR); await save();
+      setOcr(CUR,txt); applyParse(CUR); felderAusCur(); renderOcr(CUR); await save();
       toast('Text erkannt');
     }
   }catch(e){
@@ -765,8 +798,31 @@ async function pasteText(){
   }
   txt=(txt||'').trim();
   if(!txt){toast('Zwischenablage ist leer');return}
-  CUR.ocr=txt; applyParse(CUR); felderAusCur(); renderOcr(CUR);
+  setOcr(CUR,txt); applyParse(CUR); felderAusCur(); renderOcr(CUR);
   await save(); toast('Text übernommen und zugeordnet');
+}
+
+/* Bild um 90° drehen und anschließend neu einlesen. */
+async function drehen(){
+  if(!CUR||!CUR.photo){toast('Kein Foto in der App gespeichert');return}
+  const b=$('btnDreh'); b.disabled=true; b.textContent='⏳';
+  try{
+    const img=await createImageBitmap(await get('photos',CUR.photo));
+    const c=document.createElement('canvas');
+    c.width=img.height; c.height=img.width;
+    const x=c.getContext('2d');
+    x.translate(c.width/2, c.height/2);
+    x.rotate(Math.PI/2);
+    x.drawImage(img, -img.width/2, -img.height/2);
+    const neu=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));
+    await put('photos',CUR.photo,neu);
+    CUR.ocr=''; CUR.ocrRaw='';
+    await save(); openItem(CUR.id);
+    b.disabled=false; b.textContent='↻ Drehen';
+    ocrLocal(true);                        // gedrehtes Bild gleich neu lesen
+    return;
+  }catch(e){ console.error(e); toast('Drehen nicht möglich'); }
+  b.disabled=false; b.textContent='↻ Drehen';
 }
 
 /* ---------------- Export ---------------- */
