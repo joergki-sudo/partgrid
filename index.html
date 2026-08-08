@@ -421,13 +421,12 @@ async function startShortcut(replaceId){
   S.pending = replaceId || '';
   const nr = replaceId ? (S.items.find(i=>i.id===replaceId)||{}).nr : S.seq+1;
   const ctx = `${S.einsatz.fzg}|${String(nr).padStart(3,'0')}|${(S.einsatz.datum||'').replace(/-/g,'')}`;
-  const back = location.origin + location.pathname;
   await save();
-  const url = 'shortcuts://x-callback-url/run-shortcut'
+  /* Kein x-callback: Der Kurzbefehl ruft die App am Ende selbst per „URL öffnen" auf.
+     Eine Rücksprung-Adresse hier würde Kurzbefehle nur einen Fehler melden lassen. */
+  const url = 'shortcuts://run-shortcut'
             + '?name='      + encodeURIComponent(S.shortcut)
-            + '&input=text&text=' + encodeURIComponent(ctx)
-            + '&x-success=' + encodeURIComponent(back)
-            + '&x-error='   + encodeURIComponent(back);
+            + '&input=text&text=' + encodeURIComponent(ctx);
   location.href = url;
   setTimeout(()=>toast('Kurzbefehl „'+S.shortcut+'" nicht gefunden? Namen unter Einsatz › Einstellungen prüfen.',4000),1800);
 }
@@ -471,7 +470,9 @@ async function createFromCapture(d){
   S.pending='';
   const it = replace || newItem();
   it.ocr=(d.ocr||d.text||'').trim();
-  it.file=d.file||d.filename||it.file||'';
+  /* Dateinamen aus dem Kurzbefehl entschärfen (Leerzeichen, Sonderzeichen). */
+  it.file=(d.file||d.filename||it.file||'')
+            .replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'');
   if(it.photo){ await del('photos',it.photo); it.photo=''; }
   if(d.thumb){
     try{
