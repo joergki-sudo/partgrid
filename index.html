@@ -60,6 +60,12 @@ nav button.on{color:var(--acc);box-shadow:inset 0 3px 0 var(--acc)}
 .item .th{width:64px;height:64px;border-radius:8px;object-fit:cover;background:var(--panel2);
   flex:none;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--dim)}
 .item .meta{flex:1;min-width:0}
+.swipe{position:relative;overflow:hidden;border-radius:var(--r);margin-bottom:10px}
+.swipe .item{margin-bottom:0;position:relative;touch-action:pan-y;
+  transition:transform .18s ease-out;will-change:transform}
+.swipe-bg{position:absolute;inset:0;background:#5a1a1e;border-radius:var(--r);
+  display:flex;align-items:center;justify-content:flex-end;padding-right:22px;
+  color:#ffc4c4;font-weight:700;font-size:15px;letter-spacing:.03em}
 .item .nm{font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item .sub{font-size:13px;color:var(--dim);word-break:break-all}
 .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;
@@ -312,7 +318,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.9.0';
+const VERSION = '0.10.0';
 
 const DEFAULT_KATALOG = [
 "Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
@@ -575,10 +581,13 @@ function renderList(){
     L.innerHTML='<div class="empty"><div class="big">📷</div>Noch keine Bauteile erfasst.<br>Oben auf „Bauteil erfassen" tippen.</div>';
     $('listHead').textContent='Erfasste Bauteile'; return;
   }
-  $('listHead').textContent=`Erfasste Bauteile (${S.items.length})`;
+  $('listHead').innerHTML=`Erfasste Bauteile (${S.items.length})
+    <span style="font-weight:400;font-size:12px;color:var(--dim)"> · nach links wischen zum Löschen</span>`;
   L.innerHTML='';
   S.items.slice().reverse().forEach(it=>{
-    const d=document.createElement('div'); d.className='item'; d.onclick=()=>openItem(it.id);
+    const wrap=document.createElement('div'); wrap.className='swipe';
+    wrap.innerHTML='<div class="swipe-bg">🗑️ Löschen</div>';
+    const d=document.createElement('div'); d.className='item';
     const miss=[];
     if(!it.name)miss.push('Name'); if(!it.serie)miss.push('Serien-Nr.'); if(!it.ident)miss.push('Ident-Nr.');
     const tags=[];
@@ -594,11 +603,56 @@ function renderList(){
         <div class="sub">${esc(it.ort||'')}${it.ort&&(it.serie||it.ident)?' · ':''}${esc(it.serie||it.ident||'')}</div>
         <div>${tags.join('')}</div>
       </div>`;
-    L.appendChild(d);
+    wrap.appendChild(d);
+    L.appendChild(wrap);
+    wischen(d,it);
     if(it.photo) get('photos',it.photo).then(b=>{ if(!b)return;
       const el=d.querySelector('.th'); const im=new Image();
       im.className='th'; im.src=URL.createObjectURL(b); el.replaceWith(im);});
   });
+}
+
+/* Nach links wischen löscht – wie in der Mail-App. Nach rechts passiert nichts. */
+function wischen(el,it){
+  let x0=0,y0=0,dx=0,aktiv=false,gewischt=false;
+  el.addEventListener('touchstart',e=>{
+    const t=e.touches[0]; x0=t.clientX; y0=t.clientY;
+    dx=0; aktiv=false; gewischt=false; el.style.transition='none';
+  },{passive:true});
+  el.addEventListener('touchmove',e=>{
+    const t=e.touches[0], ax=t.clientX-x0, ay=t.clientY-y0;
+    if(!aktiv){
+      if(Math.abs(ax)>12 && Math.abs(ax)>Math.abs(ay)*1.5) aktiv=true;
+      else return;                       // senkrecht: scrollen lassen
+    }
+    dx=Math.min(0,ax); gewischt=true;
+    el.style.transform='translateX('+dx+'px)';
+    e.preventDefault();
+  },{passive:false});
+  el.addEventListener('touchend',()=>{
+    el.style.transition='transform .18s ease-out';
+    if(dx<-110){
+      el.style.transform='translateX(-100%)';
+      setTimeout(()=>{
+        const nr=String(it.nr).padStart(3,'0');
+        if(confirm(`Bauteil ${nr} „${it.name||'ohne Namen'}" löschen?`)) loeschen(it.id);
+        else el.style.transform='translateX(0)';
+      },170);
+    } else el.style.transform='translateX(0)';
+    setTimeout(()=>{gewischt=false},60);
+  });
+  el.addEventListener('click',e=>{
+    if(gewischt||dx<-6){ e.preventDefault(); e.stopPropagation(); return }
+    openItem(it.id);
+  });
+}
+
+function loeschen(id){
+  const it=S.items.find(i=>i.id===id); if(!it)return;
+  if(it.photo) del('photos',it.photo);
+  S.items=S.items.filter(i=>i.id!==id);
+  if(CUR&&CUR.id===id) CUR=null;
+  save().then(()=>{renderHeader();renderList();toast('Bauteil gelöscht')});
 }
 
 function openItem(id){
@@ -653,9 +707,7 @@ function saveItem(){
 function deleteItem(){
   if(!CUR)return;
   if(!confirm('Dieses Bauteil löschen?'))return;
-  if(CUR.photo) del('photos',CUR.photo);
-  S.items=S.items.filter(i=>i.id!==CUR.id); CUR=null;
-  save().then(()=>{renderHeader();go('liste');toast('Gelöscht')});
+  const id=CUR.id; loeschen(id); go('liste');
 }
 function markExchange(){
   if(!CUR){return}
