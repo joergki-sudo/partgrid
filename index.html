@@ -352,7 +352,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.17.0';
+const VERSION = '0.17.1';
 
 /* Reihenfolge = Abgehreihenfolge am Fahrzeug. Wird bewusst NICHT sortiert.
    Frei erweiterbar unter Einsatz › Einstellungen. */
@@ -468,8 +468,10 @@ function pickerOeffnen(titel, eintraege, zuletzt, cb){
                      : `<div class="hint">Kein Eintrag gefunden – Namen oben eintippen und übernehmen.</div>`;
     $('pkListe').innerHTML=h;
     [...$('pkListe').querySelectorAll('button')].forEach(b=>b.onclick=()=>{
-      const w=b.getAttribute('data-w'); pickerSchliessen(); if(pickZiel) pickZiel(w);
-    });
+      const w=b.getAttribute('data-w');
+      pickerSchliessen();
+      cb(w);                       // cb direkt aus dem Aufruf – nicht über pickZiel,
+    });                            // das beim Schließen zurückgesetzt wird
   };
   suche.addEventListener('input',zeichnen);
   zeichnen();
