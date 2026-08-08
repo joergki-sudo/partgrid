@@ -278,13 +278,25 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
     <div id="x_summary"></div>
   </div>
   <div class="card">
-    <h2>Export</h2>
-    <div class="hint">Erzeugt ein ZIP mit <b>daten.json</b>, <b>bauteile.csv</b> (Excel-fertig) und allen
-      in der App gespeicherten Fotos. Über das Teilen-Menü nach Google Drive, in „Dateien" oder per Mail.</div>
-    <button class="btn-primary btn-big" onclick="exportZip()">📦 Export erzeugen &amp; teilen</button>
-    <button class="btn-big" onclick="exportCsvOnly()">📄 Nur CSV teilen</button>
-    <div class="hint">Fotos, die der Kurzbefehl direkt in einen Ordner gespeichert hat, liegen dort –
-      sie werden in der Tabelle über den Dateinamen zugeordnet.</div>
+    <h2>Bericht ansehen &amp; als PDF sichern</h2>
+    <div class="hint">Öffnet den fertigen Anhang gleich hier auf dem iPhone – mit Fotos.
+      Für das PDF: <b>Teilen → Drucken</b>, dann in der Druckvorschau mit zwei Fingern
+      aufziehen und über <b>Teilen → In Dateien sichern</b> ablegen. Kein Excel nötig.</div>
+    <button class="btn-primary btn-big" onclick="exportHtml(true)" id="btnHtml">👁️ Bericht ansehen (PDF-fähig)</button>
+    <button class="btn-big" onclick="exportHtml(false)">📤 Bericht als Datei teilen</button>
+  </div>
+  <div class="card">
+    <h2>Excel-Tabelle</h2>
+    <div class="hint">Dieselben Daten als <b>.xlsx</b> zum Nachbearbeiten am PC – Kopfdaten,
+      Foto in jeder Zeile, Filter, Querformat. Auf dem iPhone nur weiterreichen
+      (Drive, Dateien, Mail), geöffnet wird sie am Rechner.</div>
+    <button class="btn-blue btn-big" onclick="exportXlsx()" id="btnXlsx">📊 &nbsp;Excel-Tabelle erzeugen &amp; teilen</button>
+  </div>
+  <div class="card">
+    <h2>Rohdaten</h2>
+    <div class="hint">Nur nötig, wenn du die Fotos einzeln brauchst oder selbst weiterverarbeiten willst.</div>
+    <button onclick="exportZip()" style="width:100%;margin-bottom:8px">📦 ZIP mit Fotos, CSV und JSON</button>
+    <button onclick="exportCsvOnly()" style="width:100%">📄 Nur CSV</button>
   </div>
   <div class="card">
     <h2>Neuer Einsatz</h2>
@@ -318,7 +330,7 @@ details summary{cursor:pointer;color:var(--acc2);font-size:14px;font-weight:600;
    mit der zuletzt hochgeladenen überein, zeigt das Handy
    noch die alte Fassung: nochmal neu laden.
    ======================================================= */
-const VERSION = '0.10.0';
+const VERSION = '0.12.0';
 
 const DEFAULT_KATALOG = [
 "Fahrzeugsteuergerät (ZSG)","Diagnoserechner / Datenlogger","Zugsicherung PZB",
@@ -357,6 +369,30 @@ function del(store,key){return tx(store,'readwrite').then(s=>new Promise(res=>{
   const r=s.delete(key);r.onsuccess=()=>res()}))}
 function allKeys(store){return tx(store,'readonly').then(s=>new Promise(res=>{
   const r=s.getAllKeys();r.onsuccess=()=>res(r.result||[])}))}
+
+/* ---------------- Bildanzeige ----------------
+   Bilder werden als selbsttragende Datenadresse geliefert, nicht als flüchtiger
+   Verweis: Letztere verlieren auf dem iPhone ihre Gültigkeit, sobald iOS Speicher
+   freiräumt – dann verschwinden Vorschau und Großbild. */
+const BILDCACHE=new Map();
+async function bildURL(key){
+  if(!key) return '';
+  if(BILDCACHE.has(key)) return BILDCACHE.get(key);
+  const b=await get('photos',key);
+  if(!b) return '';
+  const url=await new Promise(res=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result); r.onerror=()=>res('');
+    r.readAsDataURL(b);
+  });
+  if(BILDCACHE.size>60) BILDCACHE.delete(BILDCACHE.keys().next().value);
+  BILDCACHE.set(key,url);
+  return url;
+}
+function bildVergessen(key){ if(key) BILDCACHE.delete(key); }
+
+/* Zähler gegen sich überholende Ladevorgänge */
+let LISTEN_LAUF=0, DETAIL_LAUF=0;
 
 /* ---------------- Zustand ---------------- */
 let S={
@@ -428,6 +464,7 @@ function fillKatalog(){
 function resetAll(){
   if(!confirm('Wirklich ALLE Daten löschen? Nicht exportierte Erfassungen gehen verloren.'))return;
   allKeys('photos').then(ks=>Promise.all(ks.map(k=>del('photos',k)))).then(()=>{
+    BILDCACHE.clear();
     S={einsatz:{fzg:'',br:'',datum:'',km:'',anlass:'Fristarbeit',prot:'',bearb:'',ort:'',bem:''},
        items:[],katalog:DEFAULT_KATALOG.slice(),baureihen:[],seq:0,shortcut:'PartGrid Foto'};
     save().then(()=>location.reload());
@@ -436,6 +473,7 @@ function resetAll(){
 function clearItems(){
   if(!confirm('Bauteilliste leeren? Die Kopfdaten bleiben erhalten.'))return;
   allKeys('photos').then(ks=>Promise.all(ks.map(k=>del('photos',k)))).then(()=>{
+    BILDCACHE.clear();
     S.items=[];S.seq=0;CUR=null;save();renderHeader();renderList();toast('Liste geleert');go('liste')});
 }
 
@@ -509,7 +547,7 @@ async function createFromCapture(d){
   /* Dateinamen aus dem Kurzbefehl entschärfen (Leerzeichen, Sonderzeichen). */
   it.file=(d.file||d.filename||it.file||'')
             .replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'');
-  if(it.photo){ await del('photos',it.photo); it.photo=''; }
+  if(it.photo){ bildVergessen(it.photo); await del('photos',it.photo); it.photo=''; }
   /* Diagnose: was ist wirklich angekommen? */
   const rohThumb=b64fix(d.thumb||'');
   it.diag=`OCR ${(it.ocr||'').length} Z. · Bilddaten ${rohThumb.length} Z.`;
@@ -551,6 +589,7 @@ $('fileInput').addEventListener('change',async ev=>{
   if(!(CUR&&retakeMode)) S.items.push(it);
   retakeMode=false;
   it.photo='p'+it.id; it.file=it.file||fileName(it);
+  bildVergessen(it.photo);
   await put('photos',it.photo,await shrink(f,2000,.85));
   it.diag='';
   await save(); openItem(it.id);
@@ -575,6 +614,7 @@ async function shrink(file,max,q){
 }
 
 function renderList(){
+  const lauf=++LISTEN_LAUF;
   $('noEinsatz').classList.toggle('hidden',!!S.einsatz.fzg);
   const L=$('list');
   if(!S.items.length){
@@ -606,9 +646,12 @@ function renderList(){
     wrap.appendChild(d);
     L.appendChild(wrap);
     wischen(d,it);
-    if(it.photo) get('photos',it.photo).then(b=>{ if(!b)return;
-      const el=d.querySelector('.th'); const im=new Image();
-      im.className='th'; im.src=URL.createObjectURL(b); el.replaceWith(im);});
+    if(it.photo) bildURL(it.photo).then(url=>{
+      if(lauf!==LISTEN_LAUF || !url || !d.isConnected) return;   // Liste wurde neu gebaut
+      const el=d.querySelector('.th'); if(!el) return;
+      const im=new Image(); im.className='th'; im.alt=''; im.src=url;
+      el.replaceWith(im);
+    });
   });
 }
 
@@ -649,7 +692,7 @@ function wischen(el,it){
 
 function loeschen(id){
   const it=S.items.find(i=>i.id===id); if(!it)return;
-  if(it.photo) del('photos',it.photo);
+  if(it.photo){ bildVergessen(it.photo); del('photos',it.photo); }
   S.items=S.items.filter(i=>i.id!==id);
   if(CUR&&CUR.id===id) CUR=null;
   save().then(()=>{renderHeader();renderList();toast('Bauteil gelöscht')});
@@ -657,15 +700,18 @@ function loeschen(id){
 
 function openItem(id){
   CUR=S.items.find(i=>i.id===id); if(!CUR){toast('Nicht gefunden');return}
-  const it=CUR;
+  const it=CUR, lauf=++DETAIL_LAUF;
   $('d_name').value=it.name; $('d_ort').value=it.ort; $('d_ident').value=it.ident;
   $('d_serie').value=it.serie; $('d_rev').value=it.rev; $('d_ver').value=it.ver;
   $('d_herst').value=it.herst; $('d_zust').value=it.zust; $('d_bem').value=it.bem;
   $('d_status').value=it.status;
   $('hTitle').textContent=`Bauteil ${String(it.nr).padStart(3,'0')}`;
   const img=$('d_img'), nf=$('d_nofile');
-  img.classList.add('hidden'); nf.classList.add('hidden');
-  if(it.photo){ get('photos',it.photo).then(b=>{ if(b){img.src=URL.createObjectURL(b);img.classList.remove('hidden')} }); }
+  img.classList.add('hidden'); nf.classList.add('hidden'); img.removeAttribute('src');
+  if(it.photo){ bildURL(it.photo).then(url=>{
+      if(lauf!==DETAIL_LAUF || !url) return;      // inzwischen anderes Bauteil geöffnet
+      img.src=url; img.classList.remove('hidden');
+    }); }
   else if(it.file){ nf.classList.remove('hidden');
     nf.innerHTML=`Foto liegt im Ordner des Kurzbefehls: <b class="mono">${esc(it.file)}</b>`; }
   else { nf.classList.remove('hidden'); nf.textContent='Kein Foto hinterlegt.'; }
@@ -879,6 +925,7 @@ async function drehen(){
     x.rotate(Math.PI/2);
     x.drawImage(img, -img.width/2, -img.height/2);
     const neu=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));
+    bildVergessen(CUR.photo);
     await put('photos',CUR.photo,neu);
     CUR.ocr=''; CUR.ocrRaw='';
     await save(); openItem(CUR.id);
@@ -982,6 +1029,360 @@ function makeZip(entries){
   eo.setUint32(0,0x06054b50,true); eo.setUint16(8,entries.length,true);
   eo.setUint16(10,entries.length,true); eo.setUint32(12,clen,true); eo.setUint32(16,off,true);
   return new Blob([...parts,...central,new Uint8Array(eo.buffer)],{type:'application/zip'});
+}
+
+/* ===================================================================
+   Excel-Datei (.xlsx) direkt auf dem Gerät erzeugen – mit Fotos in den
+   Zeilen. Eine xlsx ist ein ZIP aus XML-Dateien; den ZIP-Packer haben
+   wir oben schon.
+   =================================================================== */
+
+const XCOLS=[
+ ['nr',    'Lfd.',                   6],
+ ['foto',  'Foto',                  15],
+ ['name',  'Technischer Name',      28],
+ ['ort',   'Einbauort',             18],
+ ['ident', 'Ident-/Materialnummer', 22],
+ ['serie', 'Seriennummer',          22],
+ ['rev',   'Rev.',                   8],
+ ['ver',   'Version',               11],
+ ['herst', 'Hersteller',            15],
+ ['zust',  'Zustand',               15],
+ ['bem',   'Bemerkung',             34],
+ ['status','Status',                13],
+ ['tausch','Tausch',                 9]
+];
+const XBREIT=XCOLS.length;                 // 13 Spalten = A..M
+const EMU=9525;                            // 1 Pixel in Excel-Einheiten
+const FOTO_PX=[104,84];                    // Höchstmaß der Vorschau
+const ZEILE_PT=70;                         // Zeilenhöhe der Datenzeilen
+
+const xe=s=>String(s==null?'':s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;').replace(/'/g,'&apos;')
+  .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'');
+const sp=i=>String.fromCharCode(64+i);     // 1 -> A
+const zell=(s,z,wert,stil)=>{
+  const ref=sp(s)+z;
+  if(wert===''||wert==null) return `<c r="${ref}" s="${stil}"/>`;
+  return `<c r="${ref}" s="${stil}" t="inlineStr"><is><t xml:space="preserve">${xe(wert)}</t></is></c>`;
+};
+
+/* Füllfarben in der Reihenfolge, die styles.xml anlegt */
+const XFILL={keine:0, hell:1, gelb:2, rot:3, orange:4, blau:5};
+/* Zellenstil: 6 + Füllung*3 + Art (0 normal, 1 Schreibmaschine, 2 zentriert) */
+const xs=(fuell,art)=>6+fuell*3+art;
+
+function fuellungFuer(it,i){
+  const z=(it.zust||'').toLowerCase(), st=(it.status||'').toLowerCase();
+  if(z.includes('defekt'))   return XFILL.rot;
+  if(z.includes('mangel'))   return XFILL.gelb;
+  if(st==='ausgebaut')       return XFILL.orange;
+  if(st==='eingebaut')       return XFILL.blau;
+  return i%2 ? XFILL.hell : XFILL.keine;
+}
+
+async function bildMasse(blob){
+  try{ const b=await createImageBitmap(blob); return [b.width,b.height]; }
+  catch(e){ return [FOTO_PX[0],FOTO_PX[1]]; }
+}
+
+function xStyles(){
+  const fonts=[
+    '<font><sz val="11"/><name val="Calibri"/></font>',
+    '<font><b/><sz val="14"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>',
+    '<font><b/><sz val="10"/><color rgb="FF44586B"/><name val="Calibri"/></font>',
+    '<font><sz val="11"/><name val="Calibri"/></font>',
+    '<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>',
+    '<font><sz val="10"/><name val="Consolas"/></font>',
+    '<font><i/><sz val="9"/><color rgb="FF8A9AA8"/><name val="Calibri"/></font>',
+    '<font><b/><sz val="10"/><name val="Calibri"/></font>'
+  ];
+  const farben=['','FFF2F6FA','FFFFF3CD','FFF8D7DA','FFFDE2CF','FFD6ECFF'];
+  const fills=['<fill><patternFill patternType="none"/></fill>',
+               '<fill><patternFill patternType="gray125"/></fill>',
+               '<fill><patternFill patternType="solid"><fgColor rgb="FF1F3547"/><bgColor indexed="64"/></patternFill></fill>']
+    .concat(farben.slice(1).map(f=>
+      `<fill><patternFill patternType="solid"><fgColor rgb="${f}"/><bgColor indexed="64"/></patternFill></fill>`));
+  // fills: 0 none, 1 gray125, 2 dunkel, 3 hell, 4 gelb, 5 rot, 6 orange, 7 blau
+  const borders=['<border><left/><right/><top/><bottom/><diagonal/></border>',
+    '<border><left style="thin"><color rgb="FFB9C6D2"/></left><right style="thin"><color rgb="FFB9C6D2"/></right>'+
+    '<top style="thin"><color rgb="FFB9C6D2"/></top><bottom style="thin"><color rgb="FFB9C6D2"/></bottom><diagonal/></border>'];
+
+  const xf=[];
+  xf.push('<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>');                       // 0
+  xf.push('<xf fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>'); // 1 Titel
+  xf.push('<xf fontId="2" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>');   // 2 Beschriftung
+  xf.push('<xf fontId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>');    // 3 Wert
+  xf.push('<xf fontId="4" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'); // 4 Kopf
+  xf.push('<xf fontId="6" applyFont="1"/>');                                                       // 5 Fußzeile
+  // 6.. : je Füllung drei Ausprägungen
+  [0,3,4,5,6,7].forEach(fid=>{                     // keine, hell, gelb, rot, orange, blau
+    const f = fid? ` fillId="${fid}" applyFill="1"`:'';
+    xf.push(`<xf fontId="0"${f} borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>`);
+    xf.push(`<xf fontId="5" applyFont="1"${f} borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>`);
+    xf.push(`<xf fontId="7" applyFont="1"${f} borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>`);
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="${fonts.length}">${fonts.join('')}</fonts>
+<fills count="${fills.length}">${fills.join('')}</fills>
+<borders count="${borders.length}">${borders.join('')}</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="${xf.length}">${xf.join('')}</cellXfs>
+<cellStyles count="1"><cellStyle name="Standard" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+}
+
+async function exportXlsx(){
+  if(!S.items.length){toast('Keine Bauteile erfasst');return}
+  const b=$('btnXlsx'); b.disabled=true; b.textContent='⏳ Erzeuge Tabelle…';
+  try{
+    const e=S.einsatz;
+
+    /* --- Bilder einsammeln --- */
+    const bilder=[];
+    for(const it of S.items){
+      it._bild=0;
+      if(!it.photo) continue;
+      const blob=await get('photos',it.photo);
+      if(!blob) continue;
+      const [w,h]=await bildMasse(blob);
+      bilder.push({bytes:new Uint8Array(await blob.arrayBuffer()), w, h});
+      it._bild=bilder.length;                       // 1-basiert
+    }
+
+    /* --- Kopfblock --- */
+    const kopf=[
+      ['Fahrzeug-/Loknummer', e.fzg], ['Baureihe / Fahrzeugtyp', e.br],
+      ['Datum', fmtDate(e.datum)], ['Kilometerstand', e.km?e.km+' km':''],
+      ['Anlass', e.anlass], ['Protokoll-/Auftragsnr.', e.prot],
+      ['Bearbeiter', e.bearb], ['Werk / Standort', e.ort],
+      ['Bemerkung', e.bem]
+    ].map(([k,v])=>[k, v||'–']);
+
+    const zeilen=[], merges=[];
+    zeilen.push(`<row r="1" ht="30" customHeight="1">`+
+      zell(1,1,'Bauteilerfassung – Anhang zum technischen Protokoll',1)+
+      Array.from({length:XBREIT-1},(_,i)=>zell(i+2,1,'',1)).join('')+`</row>`);
+    merges.push(`A1:${sp(XBREIT)}1`);
+
+    const proBlock=Math.ceil(kopf.length/2);
+    for(let i=0;i<proBlock;i++){
+      const z=3+i, links=kopf[i], rechts=kopf[i+proBlock];
+      let r=`<row r="${z}" ht="17" customHeight="1">`;
+      r+=zell(1,z,links?links[0]:'',2)+zell(2,z,'',2);
+      r+=zell(3,z,links?links[1]:'',3)+zell(4,z,'',3)+zell(5,z,'',3)+zell(6,z,'',3);
+      r+=zell(7,z,rechts?rechts[0]:'',2)+zell(8,z,'',2);
+      r+=zell(9,z,rechts?rechts[1]:'',3);
+      for(let c=10;c<=XBREIT;c++) r+=zell(c,z,'',3);
+      r+='</row>';
+      zeilen.push(r);
+      merges.push(`A${z}:B${z}`,`C${z}:F${z}`,`G${z}:H${z}`,`I${z}:${sp(XBREIT)}${z}`);
+    }
+
+    /* --- Tabellenkopf --- */
+    const kopfZeile=3+proBlock+1;
+    zeilen.push(`<row r="${kopfZeile}" ht="30" customHeight="1">`+
+      XCOLS.map((c,i)=>zell(i+1,kopfZeile,c[1],4)).join('')+`</row>`);
+
+    /* --- Datenzeilen --- */
+    const anker=[];
+    S.items.forEach((it,i)=>{
+      const z=kopfZeile+1+i, f=fuellungFuer(it,i);
+      let r=`<row r="${z}" ht="${ZEILE_PT}" customHeight="1">`;
+      XCOLS.forEach((c,k)=>{
+        const s=k+1, schl=c[0];
+        if(schl==='foto'){ r+=zell(s,z,'',xs(f,0)); return }
+        let art=0, wert=it[schl]==null?'':String(it[schl]);
+        if(schl==='nr'){ wert=String(it.nr).padStart(3,'0'); art=2 }
+        if(['ident','serie','rev','ver'].includes(schl)) art=1;
+        if(['rev','tausch'].includes(schl)) art=2;
+        r+=zell(s,z,wert,xs(f,art));
+      });
+      r+='</row>';
+      zeilen.push(r);
+      if(it._bild) anker.push({bild:it._bild, zeile:z-1});   // 0-basiert fürs Zeichnen
+    });
+
+    const letzte=kopfZeile+S.items.length;
+    const fussZeile=letzte+2;
+    zeilen.push(`<row r="${fussZeile}">`+zell(1,fussZeile,
+      `Erstellt ${new Date().toLocaleString('de-DE')} mit PartGrid v${VERSION} · ${S.items.length} Bauteile · `+
+      `Farben: rot = defekt, gelb = Mangel, orange = ausgebautes Altteil, blau = eingebautes Neuteil`,5)+`</row>`);
+    merges.push(`A${fussZeile}:${sp(XBREIT)}${fussZeile}`);
+
+    const cols=XCOLS.map((c,i)=>`<col min="${i+1}" max="${i+1}" width="${c[2]}" customWidth="1"/>`).join('');
+
+    const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>
+<dimension ref="A1:${sp(XBREIT)}${fussZeile}"/>
+<sheetViews><sheetView showGridLines="0" tabSelected="1" workbookViewId="0">
+<pane ySplit="${kopfZeile}" topLeftCell="A${kopfZeile+1}" activePane="bottomLeft" state="frozen"/>
+<selection pane="bottomLeft" activeCell="A${kopfZeile+1}" sqref="A${kopfZeile+1}"/>
+</sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+<cols>${cols}</cols>
+<sheetData>${zeilen.join('')}</sheetData>
+<autoFilter ref="A${kopfZeile}:${sp(XBREIT)}${letzte}"/>
+<mergeCells count="${merges.length}">${merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>
+<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>
+<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+${bilder.length?'<drawing r:id="rId1"/>':''}
+</worksheet>`;
+
+    /* --- Zeichnung mit den Fotos --- */
+    const zeichnung=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">`+
+    anker.map((a,i)=>{
+      const bi=bilder[a.bild-1];
+      const sc=Math.min(FOTO_PX[0]/bi.w, FOTO_PX[1]/bi.h, 1);
+      const cx=Math.round(bi.w*sc*EMU), cy=Math.round(bi.h*sc*EMU);
+      return `<xdr:oneCellAnchor>
+<xdr:from><xdr:col>1</xdr:col><xdr:colOff>38100</xdr:colOff><xdr:row>${a.zeile}</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from>
+<xdr:ext cx="${cx}" cy="${cy}"/>
+<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i+2}" name="Foto ${i+1}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>
+<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId${a.bild}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
+    }).join('')+`</xdr:wsDr>`;
+
+    /* --- Datei zusammensetzen --- */
+    const T=s=>new TextEncoder().encode(s);
+    const dateien=[];
+    dateien.push({name:'[Content_Types].xml',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="jpeg" ContentType="image/jpeg"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+${bilder.length?'<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>':''}
+</Types>`)});
+    dateien.push({name:'_rels/.rels',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`)});
+    dateien.push({name:'xl/workbook.xml',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Bauteilerfassung" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`)});
+    dateien.push({name:'xl/_rels/workbook.xml.rels',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`)});
+    dateien.push({name:'xl/styles.xml',data:T(xStyles())});
+    dateien.push({name:'xl/worksheets/sheet1.xml',data:T(sheet)});
+    if(bilder.length){
+      dateien.push({name:'xl/worksheets/_rels/sheet1.xml.rels',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`)});
+      dateien.push({name:'xl/drawings/drawing1.xml',data:T(zeichnung)});
+      dateien.push({name:'xl/drawings/_rels/drawing1.xml.rels',data:T(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+        bilder.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/bild${i+1}.jpeg"/>`).join('')+
+        `</Relationships>`)});
+      bilder.forEach((bi,i)=>dateien.push({name:`xl/media/bild${i+1}.jpeg`,data:bi.bytes}));
+    }
+
+    const blob=makeZip(dateien);
+    const datei=new File([blob],baseName()+'.xlsx',
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    await shareOrDownload([datei]);
+    toast('Excel-Tabelle erstellt');
+  }catch(err){
+    console.error(err);
+    toast('Tabelle konnte nicht erzeugt werden: '+err.message,5000);
+  }
+  b.disabled=false; b.textContent='📊  Excel-Tabelle erzeugen & teilen';
+}
+
+/* ===================================================================
+   Bericht als eine einzelne HTML-Datei – Fotos sind darin enthalten.
+   Lässt sich auf dem iPhone öffnen und über Teilen › Drucken als PDF
+   sichern. Kein Excel nötig.
+   =================================================================== */
+async function exportHtml(oeffnen){
+  if(!S.items.length){toast('Keine Bauteile erfasst');return}
+  const b=$('btnHtml'); b.disabled=true; b.textContent='⏳ Erzeuge Bericht…';
+  try{
+    const e=S.einsatz;
+    const kopf=[
+      ['Fahrzeug-/Loknummer',e.fzg],['Baureihe / Fahrzeugtyp',e.br],
+      ['Datum',fmtDate(e.datum)],['Kilometerstand',e.km?e.km+' km':''],
+      ['Anlass',e.anlass],['Protokoll-/Auftragsnr.',e.prot],
+      ['Bearbeiter',e.bearb],['Werk / Standort',e.ort],['Bemerkung',e.bem]
+    ].filter(r=>r[1]);
+
+    const zeilen=[];
+    for(let i=0;i<S.items.length;i++){
+      const it=S.items[i];
+      const url=it.photo? await bildURL(it.photo) : '';
+      const kl = (it.zust||'').toLowerCase().includes('defekt') ? 'rot'
+               : (it.zust||'').toLowerCase().includes('mangel') ? 'gelb'
+               : it.status==='ausgebaut' ? 'orange'
+               : it.status==='eingebaut' ? 'blau' : (i%2?'hell':'');
+      zeilen.push(`<tr class="${kl}">
+        <td class="nr">${String(it.nr).padStart(3,'0')}</td>
+        <td class="foto">${url?`<img src="${url}" alt="">`:'<span class="kein">kein Foto</span>'}</td>
+        <td>${esc(it.name)}</td><td>${esc(it.ort)}</td>
+        <td class="mo">${esc(it.ident)}</td><td class="mo">${esc(it.serie)}</td>
+        <td class="mo ce">${esc(it.rev)}</td><td class="mo">${esc(it.ver)}</td>
+        <td>${esc(it.herst)}</td><td>${esc(it.zust)}</td>
+        <td>${esc(it.bem)}</td><td>${esc(it.status)}</td><td class="ce">${esc(it.tausch)}</td>
+      </tr>`);
+    }
+
+    const html=`<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bauteilerfassung ${esc(e.fzg)} ${esc(fmtDate(e.datum))}</title>
+<style>
+@page{size:A4 landscape;margin:10mm}
+*{box-sizing:border-box}
+body{font:12px/1.4 -apple-system,"Segoe UI",Roboto,sans-serif;color:#152029;margin:0;padding:14px;background:#fff}
+h1{font-size:16px;background:#1F3547;color:#fff;padding:9px 12px;margin:0 0 12px;border-radius:4px}
+.kopf{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 18px;margin-bottom:14px}
+.kopf div{display:flex;gap:8px;padding:2px 0;border-bottom:1px solid #e6ecf2}
+.kopf b{color:#44586B;font-size:11px;min-width:145px}
+table{border-collapse:collapse;width:100%}
+th{background:#1F3547;color:#fff;font-size:10.5px;padding:6px 5px;border:1px solid #B9C6D2;text-align:center}
+td{border:1px solid #B9C6D2;padding:5px;vertical-align:middle;font-size:11px}
+td.mo{font-family:ui-monospace,Consolas,monospace;font-size:11px}
+td.nr{font-weight:700;text-align:center;width:34px}
+td.ce{text-align:center}
+td.foto{width:120px;text-align:center;padding:3px}
+td.foto img{max-width:112px;max-height:86px;display:block;margin:auto;border:1px solid #ccd6e0}
+.kein{color:#9aa9b6;font-size:10px;font-style:italic}
+tr.hell{background:#F2F6FA} tr.gelb{background:#FFF3CD} tr.rot{background:#F8D7DA}
+tr.orange{background:#FDE2CF} tr.blau{background:#D6ECFF}
+footer{margin-top:12px;font-size:10px;color:#7d8c9a;font-style:italic}
+tr{page-break-inside:avoid} thead{display:table-header-group}
+@media print{body{padding:0}}
+</style></head><body>
+<h1>Bauteilerfassung – Anhang zum technischen Protokoll</h1>
+<div class="kopf">${kopf.map(r=>`<div><b>${esc(r[0])}</b><span>${esc(r[1])}</span></div>`).join('')}</div>
+<table><thead><tr>${XCOLS.map(c=>`<th>${esc(c[1])}</th>`).join('')}</tr></thead>
+<tbody>${zeilen.join('')}</tbody></table>
+<footer>Erstellt ${new Date().toLocaleString('de-DE')} mit PartGrid v${VERSION} · ${S.items.length} Bauteile ·
+Farben: rot = defekt, gelb = Mangel, orange = ausgebautes Altteil, blau = eingebautes Neuteil</footer>
+</body></html>`;
+
+    if(oeffnen){
+      const w=window.open('','_blank');
+      if(w){ w.document.write(html); w.document.close(); toast('Bericht geöffnet – zum PDF: Teilen › Drucken',4000); }
+      else toast('Bitte Pop-ups für diese Seite erlauben');
+    } else {
+      const datei=new File([html],baseName()+'.html',{type:'text/html'});
+      await shareOrDownload([datei]);
+      toast('Bericht erstellt');
+    }
+  }catch(err){ console.error(err); toast('Bericht fehlgeschlagen: '+err.message,5000); }
+  b.disabled=false; b.textContent='👁️ Bericht ansehen (PDF-fähig)';
 }
 
 function renderExport(){
