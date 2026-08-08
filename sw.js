@@ -1,6 +1,6 @@
 /* PartGrid Service Worker – macht die App offline nutzbar.
    Bei Änderungen an index.html die Version hochzählen! */
-const V = 'partgrid-v5';
+const V = 'partgrid-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -25,7 +25,26 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
 
-  // App-Dateien: erst Netz (frische Version), sonst Cache – im Tunnel/Untergestell greift der Cache.
+  /* Seitenaufrufe IMMER aus dem Cache beantworten.
+     Grund: Der Kurzbefehl übergibt Foto und erkannten Text als Adresse. Mit Bild wird die
+     schnell länger als die rund 8000 Zeichen, die GitHub Pages annimmt – der Server würde
+     mit „URI too long" ablehnen. Aus dem Cache bedient, verlässt die Adresse das Gerät nie.
+     Die frische Fassung wird im Hintergrund nachgeladen und beim nächsten Aufruf benutzt. */
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      caches.open(V).then(c =>
+        c.match('./index.html').then(cached => {
+          const netz = fetch('./index.html')
+            .then(res => { c.put('./index.html', res.clone()); return res; })
+            .catch(() => null);
+          return cached || netz || fetch(req);
+        })
+      )
+    );
+    return;
+  }
+
+  // Übrige App-Dateien: erst Netz (frische Version), sonst Cache.
   if (new URL(req.url).origin === location.origin) {
     e.respondWith(
       fetch(req)
